@@ -10,9 +10,10 @@
     "minute": 0
   },
 
-  "postImmediatelyOnStartup": true,
+  "postImmediatelyOnStartup": false,
 
   "trackingChannelId": "1485914011345092708",
+  "adminPanelChannelId": "1485920970001744013",
 
   "days": {
     "friday": {
@@ -40,11 +41,5 @@
     "1441471887946551317"
   ],
 
-  "adminUserId": "1465834815306862806",
-
-  "embed": {
-    "title": "Bombe Cup",
-    "color": 13632027,
-    "footer": "Gladiators Vote"
-  }
+  "adminUserId": "1465834815306862806"
 }
