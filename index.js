@@ -17,648 +17,258 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
 });
 
-const POLLS_FILE = path.join(__dirname, "data", "polls.json");
+const FILE = path.join(__dirname, "data", "polls.json");
 
-let eligibleMembersCache = [];
-let eligibleMemberIdsCache = [];
-let adminPanelMessageId = null;
+let eligibleCache = [];
 
-function ensurePollFile() {
-  const dir = path.dirname(POLLS_FILE);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  if (!fs.existsSync(POLLS_FILE)) {
-    fs.writeFileSync(POLLS_FILE, "[]", "utf8");
-  }
+function load() {
+  if (!fs.existsSync(FILE)) fs.writeFileSync(FILE, "[]");
+  return JSON.parse(fs.readFileSync(FILE));
 }
 
-function loadPolls() {
-  ensurePollFile();
-  try {
-    return JSON.parse(fs.readFileSync(POLLS_FILE, "utf8"));
-  } catch (err) {
-    console.error("Fehler beim Laden von polls.json:", err);
-    return [];
-  }
+function save(d) {
+  fs.writeFileSync(FILE, JSON.stringify(d, null, 2));
 }
 
-function savePolls(data) {
-  fs.writeFileSync(POLLS_FILE, JSON.stringify(data, null, 2), "utf8");
+function isAdmin(interaction) {
+  return interaction.member.roles.cache.has(config.adminRoleId);
 }
 
 function rolePing() {
   return config.pingRoleIds.map(id => `<@&${id}>`).join(" ");
 }
 
-function formatUsers(ids) {
-  if (!ids || ids.length === 0) return "—";
-  return ids.map(id => `<@${id}>`).join(" ");
+function format(ids) {
+  return ids.length ? ids.map(id => `<@${id}>`).join(" ") : "—";
 }
 
-function getDayName(key) {
-  return {
-    friday: "Freitag",
-    saturday: "Samstag",
-    sunday: "Sonntag"
-  }[key] || key;
+function eventTitle(day) {
+  return day === "sunday" ? "🏆 T-CUP 🏆" : "💣 BOMBER CUP 💣";
 }
 
-function getEventTitle(dayKey) {
-  if (dayKey === "sunday") return "🏆 T-CUP 🏆";
-  return "💣 BOMBER CUP 💣";
-}
-
-function getTargetDateForDay(dayKey) {
+function getDate(day) {
   const map = { friday: 5, saturday: 6, sunday: 0 };
   const now = new Date();
-  const target = new Date(now);
 
-  let diff = map[dayKey] - now.getDay();
+  let diff = map[day] - now.getDay();
   if (diff <= 0) diff += 7;
 
-  target.setDate(now.getDate() + diff);
-  return target;
+  const d = new Date(now);
+  d.setDate(now.getDate() + diff);
+  return d;
 }
 
-function buildPollTimes(dayKey, dayConfig) {
-  const eventDate = getTargetDateForDay(dayKey);
-  const [eventHour, eventMinute] = dayConfig.eventTime.split(":").map(Number);
-  eventDate.setHours(eventHour, eventMinute, 0, 0);
+function buildTimes(day, cfg) {
+  const event = getDate(day);
+  const [h, m] = cfg.eventTime.split(":");
 
-  const closeDate = new Date(eventDate);
-  closeDate.setHours(dayConfig.closeHour, dayConfig.closeMinute, 0, 0);
+  event.setHours(h, m, 0, 0);
+
+  const close = new Date(event);
+  close.setHours(cfg.closeHour, cfg.closeMinute, 0, 0);
 
   return {
-    eventDate,
-    closeDate,
-    eventText: eventDate.toLocaleString("de-DE", {
-      timeZone: config.timezone
-    }),
-    closeText: closeDate.toLocaleString("de-DE", {
-      timeZone: config.timezone
-    }),
-    closeISO: closeDate.toISOString()
+    event: event.toLocaleString("de-DE"),
+    close: close.toLocaleString("de-DE"),
+    closeISO: close.toISOString()
   };
 }
 
-function buildPollEmbed(dayKey, dayConfig, poll) {
-  const yes = Object.entries(poll.votes)
-    .filter(([, value]) => value === "yes")
-    .map(([userId]) => userId);
-
-  const no = Object.entries(poll.votes)
-    .filter(([, value]) => value === "no")
-    .map(([userId]) => userId);
+function embed(day, cfg, poll) {
+  const yes = Object.entries(poll.votes).filter(v => v[1] === "yes").map(v => v[0]);
+  const no = Object.entries(poll.votes).filter(v => v[1] === "no").map(v => v[0]);
 
   return new EmbedBuilder()
-    .setTitle(getEventTitle(dayKey))
+    .setTitle(eventTitle(day))
     .setColor(0xff3c00)
     .setDescription(
-      `🛡️ **${getDayName(dayKey)}**\n\n` +
-      `📅 **Event startet:** ${poll.eventTime}\n` +
-      `⏳ **Abstimmung offen bis:** ${poll.closeTime}`
+      `📅 Event: **${poll.eventTime}**\n` +
+      `⏳ Abstimmung bis: **${poll.closeTime}**`
     )
     .addFields(
-      {
-        name: "💣 Zusage",
-        value: formatUsers(yes),
-        inline: false
-      },
-      {
-        name: "❌ Absage",
-        value: formatUsers(no),
-        inline: false
-      }
-    )
-    .setFooter({ text: "Gladiators Vote" })
-    .setTimestamp();
-}
-
-function buildVoteButtons(disabled = false) {
-  return [
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("vote_yes")
-        .setLabel("Zusage")
-        .setEmoji("💣")
-        .setStyle(ButtonStyle.Success)
-        .setDisabled(disabled),
-      new ButtonBuilder()
-        .setCustomId("vote_no")
-        .setLabel("Absage")
-        .setEmoji("❌")
-        .setStyle(ButtonStyle.Danger)
-        .setDisabled(disabled)
-    )
-  ];
-}
-
-function buildAdminPanelEmbed() {
-  return new EmbedBuilder()
-    .setTitle("🛠️ Gladiators Vote Admin Panel")
-    .setColor(0x992d22)
-    .setDescription(
-      `Hier kannst du Polls und Tracking manuell steuern.\n\n` +
-      `**Buttons:**\n` +
-      `• Polls jetzt senden\n` +
-      `• Aktive Polls löschen & neu senden\n` +
-      `• Tracking jetzt senden\n` +
-      `• Panel neu posten`
-    )
-    .setFooter({ text: "Nur für Admin" })
-    .setTimestamp();
-}
-
-function buildAdminButtons() {
-  return [
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("admin_send_polls_now")
-        .setLabel("Polls jetzt senden")
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId("admin_reset_and_resend")
-        .setLabel("Aktive Polls löschen & neu senden")
-        .setStyle(ButtonStyle.Danger)
-    ),
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("admin_post_tracking_now")
-        .setLabel("Tracking jetzt senden")
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId("admin_repost_panel")
-        .setLabel("Panel neu posten")
-        .setStyle(ButtonStyle.Secondary)
-    )
-  ];
-}
-
-async function refreshEligibleMembers(guild) {
-  try {
-    const memberMap = new Map();
-
-    for (const roleId of config.pingRoleIds) {
-      const role = await guild.roles.fetch(roleId).catch(() => null);
-      if (!role) continue;
-
-      const fullRole = guild.roles.cache.get(roleId);
-      if (!fullRole) continue;
-
-      for (const member of fullRole.members.values()) {
-        if (!member.user.bot) {
-          memberMap.set(member.id, member);
-        }
-      }
-    }
-
-    eligibleMembersCache = [...memberMap.values()];
-    eligibleMemberIdsCache = eligibleMembersCache.map(member => member.id);
-
-    console.log(`Eligible Members geladen: ${eligibleMemberIdsCache.length}`);
-  } catch (err) {
-    console.error("Fehler beim Laden der Rollenmitglieder:", err);
-  }
-}
-
-async function ensureAdminPanel() {
-  try {
-    const guild = await client.guilds.fetch(config.guildId);
-    const channel = await guild.channels.fetch(config.adminPanelChannelId);
-    if (!channel) return;
-
-    if (adminPanelMessageId) {
-      try {
-        const existing = await channel.messages.fetch(adminPanelMessageId);
-        if (existing) {
-          await existing.edit({
-            embeds: [buildAdminPanelEmbed()],
-            components: buildAdminButtons()
-          });
-          return;
-        }
-      } catch (_) {}
-    }
-
-    const recentMessages = await channel.messages.fetch({ limit: 20 });
-    const existingPanel = recentMessages.find(
-      msg =>
-        msg.author.id === client.user.id &&
-        msg.embeds.length &&
-        msg.embeds[0].title === "🛠️ Gladiators Vote Admin Panel"
+      { name: "💣 Zusage", value: format(yes) },
+      { name: "❌ Absage", value: format(no) }
     );
-
-    if (existingPanel) {
-      adminPanelMessageId = existingPanel.id;
-      await existingPanel.edit({
-        embeds: [buildAdminPanelEmbed()],
-        components: buildAdminButtons()
-      });
-      return;
-    }
-
-    const msg = await channel.send({
-      embeds: [buildAdminPanelEmbed()],
-      components: buildAdminButtons()
-    });
-
-    adminPanelMessageId = msg.id;
-  } catch (err) {
-    console.error("Fehler beim Erstellen/Aktualisieren des Admin Panels:", err);
-  }
 }
 
-function getActivePolls() {
-  return loadPolls().filter(poll => !poll.closed);
+function buttons(disabled = false) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("yes").setLabel("Zusage").setEmoji("💣").setStyle(3).setDisabled(disabled),
+      new ButtonBuilder().setCustomId("no").setLabel("Absage").setEmoji("❌").setStyle(4).setDisabled(disabled)
+    )
+  ];
 }
 
-async function createPoll(dayKey, dayConfig) {
+async function loadMembers() {
   const guild = await client.guilds.fetch(config.guildId);
-  const channel = await guild.channels.fetch(dayConfig.channelId);
 
-  if (!channel) {
-    console.error(`Kanal nicht gefunden für ${dayKey}`);
-    return;
+  const set = new Set();
+
+  for (const id of config.pingRoleIds) {
+    const role = guild.roles.cache.get(id);
+    if (!role) continue;
+
+    role.members.forEach(m => {
+      if (!m.user.bot) set.add(m.id);
+    });
   }
 
-  const times = buildPollTimes(dayKey, dayConfig);
+  eligibleCache = [...set];
+  console.log("Members geladen:", eligibleCache.length);
+}
+
+async function createPoll(day, cfg) {
+  const guild = await client.guilds.fetch(config.guildId);
+  const channel = await guild.channels.fetch(cfg.channelId);
+
+  const t = buildTimes(day, cfg);
 
   const poll = {
-    id: `${dayKey}_${Date.now()}`,
-    dayKey,
-    channelId: dayConfig.channelId,
+    day,
+    channelId: cfg.channelId,
     votes: {},
-    eligible: [...eligibleMemberIdsCache],
+    eligible: eligibleCache,
     closed: false,
-    closeAt: times.closeISO,
-    eventTime: times.eventText,
-    closeTime: times.closeText,
-    createdAt: new Date().toISOString()
+    eventTime: t.event,
+    closeTime: t.close,
+    closeAt: t.closeISO
   };
 
-  const pollMessage = await channel.send({
+  const msg = await channel.send({
     content: rolePing(),
-    embeds: [buildPollEmbed(dayKey, dayConfig, poll)],
-    components: buildVoteButtons(false)
+    embeds: [embed(day, cfg, poll)],
+    components: buttons()
   });
 
-  const statusMessage = await channel.send({
-    content:
-      poll.eligible.length > 0
-        ? `⏳ **Noch nicht abgestimmt:**\n${formatUsers(poll.eligible)}`
-        : "✅ **Alle abgestimmt**"
-  });
+  const status = await channel.send(
+    eligibleCache.length
+      ? `⏳ Noch nicht abgestimmt:\n${format(eligibleCache)}`
+      : "Alle abgestimmt"
+  );
 
-  poll.msgId = pollMessage.id;
-  poll.statusId = statusMessage.id;
+  poll.msgId = msg.id;
+  poll.statusId = status.id;
 
-  const polls = loadPolls();
-  polls.push(poll);
-  savePolls(polls);
-
-  console.log(`Poll erstellt: ${dayKey} -> ${dayConfig.channelId}`);
+  const data = load();
+  data.push(poll);
+  save(data);
 }
 
-async function createAllPolls() {
-  const activePolls = getActivePolls();
-  if (activePolls.length > 0) {
-    console.log("Es gibt bereits aktive Polls. Kein neuer automatischer Post.");
+async function createAll() {
+  const data = load();
+
+  if (data.some(p => !p.closed)) {
+    console.log("Aktive Polls vorhanden → skip");
     return;
   }
 
+  await loadMembers();
+
+  for (const [d, cfg] of Object.entries(config.days)) {
+    await createPoll(d, cfg);
+  }
+}
+
+async function update(poll) {
   const guild = await client.guilds.fetch(config.guildId);
-  await refreshEligibleMembers(guild);
+  const ch = await guild.channels.fetch(poll.channelId);
 
-  for (const [dayKey, dayConfig] of Object.entries(config.days)) {
-    await createPoll(dayKey, dayConfig);
-  }
+  const msg = await ch.messages.fetch(poll.msgId);
+  const status = await ch.messages.fetch(poll.statusId);
+
+  const cfg = config.days[poll.day];
+
+  await msg.edit({
+    embeds: [embed(poll.day, cfg, poll)],
+    components: buttons(poll.closed)
+  });
+
+  const remaining = poll.eligible.filter(id => !poll.votes[id]);
+
+  if (!remaining.length) await status.edit("✅ Alle abgestimmt");
+  else if (poll.closed) await status.edit("🔒 Umfrage beendet");
+  else await status.edit(`⏳ Noch nicht abgestimmt:\n${format(remaining)}`);
 }
 
-async function updatePollMessage(poll) {
-  try {
-    const guild = await client.guilds.fetch(config.guildId);
-    const channel = await guild.channels.fetch(poll.channelId);
-    if (!channel) return;
-
-    const pollMessage = await channel.messages.fetch(poll.msgId);
-    const statusMessage = await channel.messages.fetch(poll.statusId);
-    const dayConfig = config.days[poll.dayKey];
-
-    await pollMessage.edit({
-      content: rolePing(),
-      embeds: [buildPollEmbed(poll.dayKey, dayConfig, poll)],
-      components: buildVoteButtons(poll.closed)
-    });
-
-    const remaining = poll.eligible.filter(userId => !poll.votes[userId]);
-
-    if (remaining.length === 0) {
-      await statusMessage.edit({
-        content: poll.closed
-          ? "🔒 **Umfrage beendet. Alle haben abgestimmt.**"
-          : "✅ **Alle abgestimmt**"
-      });
-    } else if (poll.closed) {
-      await statusMessage.edit({
-        content:
-          `🔒 **Umfrage beendet.**\n\n` +
-          `Nicht abgestimmt:\n${formatUsers(remaining)}`
-      });
-    } else {
-      await statusMessage.edit({
-        content: `⏳ **Noch nicht abgestimmt:**\n${formatUsers(remaining)}`
-      });
-    }
-  } catch (err) {
-    console.error("Fehler beim Aktualisieren einer Poll:", err);
-  }
-}
-
-async function closeDuePolls() {
-  const polls = loadPolls();
+async function closePolls() {
+  const data = load();
   const now = new Date();
-  let changed = false;
 
-  for (const poll of polls) {
-    if (!poll.closed && now >= new Date(poll.closeAt)) {
-      poll.closed = true;
-      changed = true;
-      await updatePollMessage(poll);
-      console.log(`Poll geschlossen: ${poll.dayKey}`);
+  for (const p of data) {
+    if (!p.closed && now >= new Date(p.closeAt)) {
+      p.closed = true;
+      await update(p);
     }
   }
 
-  if (changed) {
-    savePolls(polls);
-  }
+  save(data);
 }
 
-function getLastWeekWindow() {
-  const now = new Date();
-  const currentDay = now.getDay();
-  const daysSinceMonday = currentDay === 0 ? 6 : currentDay - 1;
+async function adminPanel() {
+  const guild = await client.guilds.fetch(config.guildId);
+  const ch = await guild.channels.fetch(config.adminPanelChannelId);
 
-  const thisMonday = new Date(now);
-  thisMonday.setDate(now.getDate() - daysSinceMonday);
-  thisMonday.setHours(0, 0, 0, 0);
-
-  const lastMonday = new Date(thisMonday);
-  lastMonday.setDate(thisMonday.getDate() - 7);
-
-  return { start: lastMonday, end: thisMonday };
-}
-
-function isPollFromLastWeek(poll) {
-  const createdAt = new Date(poll.createdAt);
-  const { start, end } = getLastWeekWindow();
-  return createdAt >= start && createdAt < end;
-}
-
-async function postWeeklyTracking() {
-  try {
-    const guild = await client.guilds.fetch(config.guildId);
-    const channel = await guild.channels.fetch(config.trackingChannelId);
-    if (!channel) {
-      console.error("Tracking-Kanal nicht gefunden.");
-      return;
-    }
-
-    await refreshEligibleMembers(guild);
-
-    const polls = loadPolls().filter(isPollFromLastWeek);
-
-    const stats = new Map();
-    for (const userId of eligibleMemberIdsCache) {
-      stats.set(userId, { userId, yes: 0, no: 0 });
-    }
-
-    for (const poll of polls) {
-      for (const userId of poll.eligible) {
-        if (!stats.has(userId)) {
-          stats.set(userId, { userId, yes: 0, no: 0 });
-        }
-
-        const vote = poll.votes[userId];
-        if (vote === "yes") {
-          stats.get(userId).yes += 1;
-        } else {
-          stats.get(userId).no += 1;
-        }
-      }
-    }
-
-    const sorted = [...stats.values()].sort((a, b) => {
-      if (b.yes !== a.yes) return b.yes - a.yes;
-      if (a.no !== b.no) return a.no - b.no;
-      return a.userId.localeCompare(b.userId);
-    });
-
-    let description = "";
-    if (polls.length === 0) {
-      description = "Für die vergangene Woche wurden keine Poll-Daten gefunden.";
-    } else {
-      description = sorted
-        .map((entry, index) => {
-          const ratio = `${entry.yes}/3`;
-          return `**${index + 1}.** <@${entry.userId}> • 💣 ${entry.yes} • ❌ ${entry.no} • **${ratio}**`;
-        })
-        .join("\n");
-    }
-
-    const embed = new EmbedBuilder()
-      .setTitle("🏛️ Weekly Gladiator Ranking")
-      .setColor(0xff3c00)
-      .setDescription(
-        `⚔️ **Kampfbereitschaft der letzten Woche** ⚔️\n\n${description}`
+  await ch.send({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("🛠️ Admin Panel")
+        .setDescription("Steuere den Bot")
+    ],
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("send").setLabel("Polls senden").setStyle(1),
+        new ButtonBuilder().setCustomId("reset").setLabel("Reset Polls").setStyle(4)
       )
-      .setFooter({ text: "Nicht abgestimmt = Absage" })
-      .setTimestamp();
-
-    await channel.send({ embeds: [embed] });
-    console.log("Tracking gepostet.");
-  } catch (err) {
-    console.error("Fehler beim Weekly Tracking:", err);
-  }
+    ]
+  });
 }
 
-async function deleteActivePollsAndResend() {
-  const polls = loadPolls();
-  const activePolls = polls.filter(poll => !poll.closed);
+client.on("interactionCreate", async i => {
+  if (!i.isButton()) return;
 
-  for (const poll of activePolls) {
-    try {
-      const guild = await client.guilds.fetch(config.guildId);
-      const channel = await guild.channels.fetch(poll.channelId);
-      if (!channel) continue;
+  if (!isAdmin(i) && ["send", "reset"].includes(i.customId))
+    return i.reply({ content: "Kein Admin", ephemeral: true });
 
-      const pollMessage = await channel.messages.fetch(poll.msgId).catch(() => null);
-      const statusMessage = await channel.messages.fetch(poll.statusId).catch(() => null);
+  if (i.customId === "yes" || i.customId === "no") {
+    await i.deferReply({ ephemeral: true });
 
-      if (pollMessage) await pollMessage.delete().catch(() => null);
-      if (statusMessage) await statusMessage.delete().catch(() => null);
-    } catch (err) {
-      console.error("Fehler beim Löschen aktiver Polls:", err);
-    }
+    const data = load();
+    const poll = data.find(p => p.msgId === i.message.id);
+
+    if (!poll) return;
+
+    poll.votes[i.user.id] = i.customId === "yes" ? "yes" : "no";
+
+    save(data);
+    await update(poll);
+
+    return i.editReply("Gespeichert 💣");
   }
 
-  const remaining = polls.filter(poll => poll.closed);
-  savePolls(remaining);
+  if (i.customId === "send") {
+    await createAll();
+    return i.reply({ content: "Polls gesendet", ephemeral: true });
+  }
 
-  await createAllPolls();
-}
-
-async function runMondayJob() {
-  console.log("Montags-Job gestartet...");
-  await postWeeklyTracking();
-  await createAllPolls();
-}
-
-function isAdmin(interaction) {
-  return interaction.user.id === config.adminUserId;
-}
-
-client.on("interactionCreate", async interaction => {
-  try {
-    if (interaction.isButton()) {
-      if (["vote_yes", "vote_no"].includes(interaction.customId)) {
-        const polls = loadPolls();
-        const poll = polls.find(p => p.msgId === interaction.message.id);
-
-        if (!poll) {
-          return interaction.reply({
-            content: "Diese Umfrage wurde nicht gefunden.",
-            ephemeral: true
-          });
-        }
-
-        if (poll.closed) {
-          return interaction.reply({
-            content: "Diese Umfrage ist bereits beendet.",
-            ephemeral: true
-          });
-        }
-
-        if (!poll.eligible.includes(interaction.user.id)) {
-          return interaction.reply({
-            content: "Du bist für diese Umfrage nicht freigeschaltet.",
-            ephemeral: true
-          });
-        }
-
-        await interaction.deferReply({ ephemeral: true });
-
-        poll.votes[interaction.user.id] =
-          interaction.customId === "vote_yes" ? "yes" : "no";
-
-        savePolls(polls);
-        await updatePollMessage(poll);
-
-        await interaction.editReply({
-          content:
-            interaction.customId === "vote_yes"
-              ? "Deine Zusage wurde gespeichert 💣"
-              : "Deine Absage wurde gespeichert ❌"
-        });
-
-        return;
-      }
-
-      if (
-        [
-          "admin_send_polls_now",
-          "admin_reset_and_resend",
-          "admin_post_tracking_now",
-          "admin_repost_panel"
-        ].includes(interaction.customId)
-      ) {
-        if (!isAdmin(interaction)) {
-          return interaction.reply({
-            content: "Nur der Admin kann dieses Panel nutzen.",
-            ephemeral: true
-          });
-        }
-
-        await interaction.deferReply({ ephemeral: true });
-
-        if (interaction.customId === "admin_send_polls_now") {
-          await createAllPolls();
-          return interaction.editReply("Polls wurden geprüft und ggf. gesendet.");
-        }
-
-        if (interaction.customId === "admin_reset_and_resend") {
-          await deleteActivePollsAndResend();
-          return interaction.editReply("Aktive Polls wurden gelöscht und neu gesendet.");
-        }
-
-        if (interaction.customId === "admin_post_tracking_now") {
-          await postWeeklyTracking();
-          return interaction.editReply("Tracking wurde gepostet.");
-        }
-
-        if (interaction.customId === "admin_repost_panel") {
-          adminPanelMessageId = null;
-          await ensureAdminPanel();
-          return interaction.editReply("Admin Panel wurde neu gepostet/aktualisiert.");
-        }
-      }
-    }
-  } catch (err) {
-    console.error("Fehler bei interactionCreate:", err);
-
-    if (!interaction.replied && !interaction.deferred) {
-      try {
-        await interaction.reply({
-          content: "Es ist ein Fehler aufgetreten.",
-          ephemeral: true
-        });
-      } catch (_) {}
-    } else if (interaction.deferred && !interaction.replied) {
-      try {
-        await interaction.editReply("Es ist ein Fehler aufgetreten.");
-      } catch (_) {}
-    }
+  if (i.customId === "reset") {
+    save([]);
+    await createAll();
+    return i.reply({ content: "Reset + neue Polls", ephemeral: true });
   }
 });
 
 client.once("clientReady", async () => {
-  console.log(`Bot online als ${client.user.tag}`);
+  console.log("BOT ONLINE");
 
-  const guild = await client.guilds.fetch(config.guildId);
-  await refreshEligibleMembers(guild);
-  await ensureAdminPanel();
+  await loadMembers();
+  await adminPanel();
 
-  cron.schedule(
-    "0 7 * * 1",
-    async () => {
-      await runMondayJob();
-    },
-    {
-      timezone: config.timezone
-    }
-  );
+  cron.schedule("0 7 * * 1", createAll, {
+    timezone: config.timezone
+  });
 
-  cron.schedule(
-    "* * * * *",
-    async () => {
-      await closeDuePolls();
-    },
-    {
-      timezone: config.timezone
-    }
-  );
-});
-
-client.on("error", err => {
-  console.error("Client Error:", err);
-});
-
-process.on("unhandledRejection", err => {
-  console.error("Unhandled Rejection:", err);
-});
-
-process.on("uncaughtException", err => {
-  console.error("Uncaught Exception:", err);
+  cron.schedule("* * * * *", closePolls);
 });
 
 client.login(process.env.TOKEN);
