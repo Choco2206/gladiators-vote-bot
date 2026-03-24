@@ -200,7 +200,6 @@ async function refreshEligibleUsers() {
   try {
     const guild = await client.guilds.fetch(config.guildId);
 
-    // Einmal vollständig laden, damit role.members wirklich alle enthält
     await guild.members.fetch();
 
     const memberMap = new Map();
@@ -504,41 +503,17 @@ client.on("interactionCreate", async interaction => {
       const polls = load();
       const poll = polls.find(p => p.msgId === interaction.message.id);
 
-      if (!poll) {
-        return interaction.reply({
-          content: "Diese Umfrage wurde nicht gefunden.",
-          ephemeral: true
-        });
-      }
+      if (!poll) return;
+      if (poll.closed) return;
+      if (!poll.eligible.includes(interaction.user.id)) return;
 
-      if (poll.closed) {
-        return interaction.reply({
-          content: "Diese Umfrage ist bereits beendet.",
-          ephemeral: true
-        });
-      }
-
-      if (!poll.eligible.includes(interaction.user.id)) {
-        return interaction.reply({
-          content: "Du bist für diese Umfrage nicht freigeschaltet.",
-          ephemeral: true
-        });
-      }
-
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferUpdate();
 
       poll.votes[interaction.user.id] =
         interaction.customId === "vote_yes" ? "yes" : "no";
 
       save(polls);
       await updatePollMessage(poll);
-
-      await interaction.editReply({
-        content:
-          interaction.customId === "vote_yes"
-            ? "Deine Zusage wurde gespeichert 💣"
-            : "Deine Absage wurde gespeichert ❌"
-      });
 
       return;
     }
