@@ -1,0 +1,50 @@
+{
+  "botName": "Gladiators Vote",
+  "guildId": "1441059738610696345",
+  "applicationId": "1485472793771511989",
+  "timezone": "Europe/Berlin",
+
+  "postSchedule": {
+    "day": "Monday",
+    "hour": 7,
+    "minute": 0
+  },
+
+  "postImmediatelyOnStartup": true,
+
+  "trackingChannelId": "1485914011345092708",
+
+  "days": {
+    "friday": {
+      "channelId": "1485470967752032406",
+      "eventTime": "21:00",
+      "closeHour": 12,
+      "closeMinute": 0
+    },
+    "saturday": {
+      "channelId": "1485471020293816372",
+      "eventTime": "21:00",
+      "closeHour": 12,
+      "closeMinute": 0
+    },
+    "sunday": {
+      "channelId": "1485471079550943363",
+      "eventTime": "20:00",
+      "closeHour": 12,
+      "closeMinute": 0
+    }
+  },
+
+  "pingRoleIds": [
+    "1441147464265633792",
+    "1441471887946551317"
+  ],
+
+  "adminUserId": "1465834815306862806",
+
+  "embed": {
+    "title": "Bombe Cup",
+    "color": 13632027,
+    "footer": "Gladiators Vote"
+  }
+}
