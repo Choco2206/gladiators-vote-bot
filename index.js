@@ -81,22 +81,32 @@ function getNextDateForDay(dayKey) {
   return result;
 }
 
+function pad(n) {
+  return String(n).padStart(2, "0");
+}
+
 function buildTimes(dayKey, cfg) {
-  const eventDate = getNextDateForDay(dayKey);
+  const targetDate = getNextDateForDay(dayKey);
+
   const [eventHour, eventMinute] = cfg.eventTime.split(":").map(Number);
 
+  const eventDate = new Date(targetDate);
   eventDate.setHours(eventHour, eventMinute, 0, 0);
 
-  const closeDate = new Date(eventDate);
+  const closeDate = new Date(targetDate);
   closeDate.setHours(cfg.closeHour, cfg.closeMinute, 0, 0);
 
+  const eventText =
+    `${pad(eventDate.getDate())}.${pad(eventDate.getMonth() + 1)}.${eventDate.getFullYear()}, ` +
+    `${pad(eventHour)}:${pad(eventMinute)} Uhr`;
+
+  const closeText =
+    `${pad(closeDate.getDate())}.${pad(closeDate.getMonth() + 1)}.${closeDate.getFullYear()}, ` +
+    `${pad(cfg.closeHour)}:${pad(cfg.closeMinute)} Uhr`;
+
   return {
-    eventText: eventDate.toLocaleString("de-DE", {
-      timeZone: config.timezone
-    }),
-    closeText: closeDate.toLocaleString("de-DE", {
-      timeZone: config.timezone
-    }),
+    eventText,
+    closeText,
     closeISO: closeDate.toISOString()
   };
 }
