@@ -51,7 +51,10 @@ function isAdmin(interaction) {
 
 function formatUsers(ids) {
   if (!ids || ids.length === 0) return "—";
-  return ids.map(id => `<@${id}>`).join(" ");
+
+  return ids
+    .map(id => `• <@${id}>`)
+    .join("\n");
 }
 
 function getDayLabel(dayKey) {
