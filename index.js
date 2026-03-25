@@ -200,7 +200,8 @@ async function refreshEligibleUsers() {
   try {
     const guild = await client.guilds.fetch(config.guildId);
 
-    await guild.members.fetch();
+    // Wichtig: lädt alle Mitglieder vollständig neu
+    await guild.members.fetch({ force: true });
 
     const memberMap = new Map();
 
