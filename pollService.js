@@ -18,6 +18,11 @@ function formatUsers(ids) {
   return ids.map(id => `• <@${id}>`).join("\n");
 }
 
+function mentionUsersInline(ids) {
+  if (!ids || ids.length === 0) return "";
+  return ids.map(id => `<@${id}>`).join(" ");
+}
+
 function getDayLabel(dayKey) {
   return {
     friday: "Freitag",
@@ -123,6 +128,14 @@ function buildPollEmbed(dayKey, poll) {
     .setTimestamp();
 }
 
+function buildPollLink(config, poll) {
+  return `https://discord.com/channels/${config.guildId}/${poll.channelId}/${poll.msgId}`;
+}
+
+function getRemainingUsers(poll) {
+  return (poll.eligible || []).filter(userId => !poll.votes[userId]);
+}
+
 // =========================
 // MEMBERS
 // =========================
@@ -182,7 +195,9 @@ async function createPoll(client, config, dayKey, cfg) {
     closeAt: times.closeISO,
     eventTime: times.eventText,
     closeTime: times.closeText,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    reminderSent: false,
+    reminderMessageId: null
   };
 
   const pollMessage = await channel.send({
@@ -238,7 +253,7 @@ async function updatePollMessage(client, config, poll) {
       });
     }
 
-    const remaining = poll.eligible.filter(userId => !poll.votes[userId]);
+    const remaining = getRemainingUsers(poll);
 
     if (statusMessage) {
       if (remaining.length === 0) {
@@ -264,6 +279,28 @@ async function updatePollMessage(client, config, poll) {
   }
 }
 
+async function deleteReminderMessage(client, config, poll) {
+  if (!poll.reminderMessageId) return;
+
+  try {
+    const guild = await client.guilds.fetch(config.guildId);
+    const channel = await guild.channels.fetch(poll.channelId);
+    if (!channel) return;
+
+    const reminderMessage = await channel.messages
+      .fetch(poll.reminderMessageId)
+      .catch(() => null);
+
+    if (reminderMessage) {
+      await reminderMessage.delete().catch(() => null);
+    }
+
+    poll.reminderMessageId = null;
+  } catch (err) {
+    console.error("Fehler beim Löschen der Reminder-Nachricht:", err);
+  }
+}
+
 async function closeDuePolls(client, config) {
   const polls = load();
   const now = new Date();
@@ -273,7 +310,10 @@ async function closeDuePolls(client, config) {
     if (!poll.closed && now >= new Date(poll.closeAt)) {
       poll.closed = true;
       changed = true;
+
+      await deleteReminderMessage(client, config, poll);
       await updatePollMessage(client, config, poll);
+
       console.log(`Poll geschlossen: ${poll.dayKey}`);
     }
   }
@@ -312,9 +352,13 @@ async function deleteActivePollsAndResend(client, config) {
 
       const pollMessage = await channel.messages.fetch(poll.msgId).catch(() => null);
       const statusMessage = await channel.messages.fetch(poll.statusId).catch(() => null);
+      const reminderMessage = poll.reminderMessageId
+        ? await channel.messages.fetch(poll.reminderMessageId).catch(() => null)
+        : null;
 
       if (pollMessage) await pollMessage.delete().catch(() => null);
       if (statusMessage) await statusMessage.delete().catch(() => null);
+      if (reminderMessage) await reminderMessage.delete().catch(() => null);
     } catch (err) {
       console.error("Fehler beim Löschen aktiver Polls:", err);
     }
@@ -337,9 +381,13 @@ async function deleteOldPollMessages(client, config) {
 
       const pollMessage = await channel.messages.fetch(poll.msgId).catch(() => null);
       const statusMessage = await channel.messages.fetch(poll.statusId).catch(() => null);
+      const reminderMessage = poll.reminderMessageId
+        ? await channel.messages.fetch(poll.reminderMessageId).catch(() => null)
+        : null;
 
       if (pollMessage) await pollMessage.delete().catch(() => null);
       if (statusMessage) await statusMessage.delete().catch(() => null);
+      if (reminderMessage) await reminderMessage.delete().catch(() => null);
     } catch (err) {
       console.error("Fehler beim Löschen alter Poll-Nachrichten:", err);
     }
@@ -364,7 +412,10 @@ async function showActivePolls(interaction) {
   }
 
   const text = polls
-    .map(p => `• ${p.dayKey.toUpperCase()} | Stimmen: ${Object.keys(p.votes).length}/${p.eligible.length}`)
+    .map(
+      p =>
+        `• ${p.dayKey.toUpperCase()} | Stimmen: ${Object.keys(p.votes).length}/${p.eligible.length}`
+    )
     .join("\n");
 
   return interaction.reply({
@@ -381,7 +432,7 @@ async function syncPolls(client, config) {
   }
 }
 
-async function sendReminder(interaction) {
+async function sendReminder(interaction, client, config) {
   const polls = load().filter(p => !p.closed);
 
   if (polls.length === 0) {
@@ -391,21 +442,97 @@ async function sendReminder(interaction) {
     });
   }
 
-  let message = "⚠️ **Noch nicht abgestimmt:**\n\n";
+  let sentCount = 0;
+  const allPolls = load();
+
+  for (const poll of allPolls) {
+    if (poll.closed) continue;
+
+    const remaining = getRemainingUsers(poll);
+    if (remaining.length === 0) continue;
+
+    const guild = await client.guilds.fetch(config.guildId);
+    const channel = await guild.channels.fetch(poll.channelId);
+    if (!channel) continue;
+
+    const pollLink = buildPollLink(config, poll);
+
+    const reminderMessage = await channel.send({
+      content:
+        `⚠️ **Erinnerung für ${getDayLabel(poll.dayKey)}**\n\n` +
+        `Folgende Leute haben noch nicht abgestimmt:\n` +
+        `${mentionUsersInline(remaining)}\n\n` +
+        `Bitte jetzt kurz abstimmen.\n` +
+        `**Nicht abgestimmt = Absage**\n\n` +
+        `Zur Umfrage:\n${pollLink}`,
+      allowedMentions: { parse: ["users"] }
+    });
+
+    poll.reminderSent = true;
+    poll.reminderMessageId = reminderMessage.id;
+    sentCount += 1;
+  }
+
+  save(allPolls);
+
+  return interaction.reply({
+    content:
+      sentCount > 0
+        ? `Reminder wurden in ${sentCount} Channel(s) gesendet.`
+        : "Es gibt keine offenen Stimmen mehr.",
+    ephemeral: true
+  });
+}
+
+async function sendAutomaticReminders(client, config) {
+  const polls = load();
+  const now = new Date();
+  let changed = false;
 
   for (const poll of polls) {
-    const remaining = poll.eligible.filter(id => !poll.votes[id]);
+    if (poll.closed) continue;
+    if (poll.reminderSent) continue;
 
-    if (remaining.length > 0) {
-      message += `**${poll.dayKey.toUpperCase()}**\n`;
-      message += remaining.map(id => `<@${id}>`).join(" ") + "\n\n";
+    const remaining = getRemainingUsers(poll);
+    if (remaining.length === 0) continue;
+
+    const closeTime = new Date(poll.closeAt);
+    const diffMs = closeTime.getTime() - now.getTime();
+    const diffMinutes = diffMs / 1000 / 60;
+
+    if (diffMinutes <= 60 && diffMinutes > 59) {
+      try {
+        const guild = await client.guilds.fetch(config.guildId);
+        const channel = await guild.channels.fetch(poll.channelId);
+        if (!channel) continue;
+
+        const pollLink = buildPollLink(config, poll);
+
+        const reminderMessage = await channel.send({
+          content:
+            `⚠️ **Erinnerung für ${getDayLabel(poll.dayKey)}**\n\n` +
+            `Folgende Leute haben noch nicht abgestimmt:\n` +
+            `${mentionUsersInline(remaining)}\n\n` +
+            `Bitte jetzt kurz abstimmen.\n` +
+            `**Nicht abgestimmt = Absage**\n\n` +
+            `Zur Umfrage:\n${pollLink}`,
+          allowedMentions: { parse: ["users"] }
+        });
+
+        poll.reminderSent = true;
+        poll.reminderMessageId = reminderMessage.id;
+        changed = true;
+
+        console.log(`Automatischer Reminder gesendet: ${poll.dayKey}`);
+      } catch (err) {
+        console.error("Fehler beim automatischen Reminder:", err);
+      }
     }
   }
 
-  return interaction.reply({
-    content: message,
-    allowedMentions: { parse: ["users"] }
-  });
+  if (changed) {
+    save(polls);
+  }
 }
 
 module.exports = {
@@ -417,5 +544,6 @@ module.exports = {
   clearAllPollData,
   showActivePolls,
   syncPolls,
-  sendReminder
+  sendReminder,
+  sendAutomaticReminders
 };
