@@ -14,7 +14,8 @@ const {
   clearAllPollData,
   showActivePolls,
   syncPolls,
-  sendReminder
+  sendReminder,
+  sendAutomaticReminders
 } = require("./pollService");
 const { postTracking } = require("./tracking");
 
@@ -34,22 +35,22 @@ async function runMondayFlow() {
   try {
     console.log("Montags-Flow gestartet...");
 
-    // 1. Tracking posten
+    // 1. Tracking der vergangenen Woche posten
     await postTracking(client, config);
 
-    // 2. 5 Minuten warten
-    await wait(5 * 60 * 1000);
+    // 2. Kurz warten, damit das sauber gepostet ist
+    await wait(2 * 60 * 1000);
 
-    // 3. Alte Poll-Nachrichten löschen
+    // 3. Alte Poll-Nachrichten der vergangenen Woche löschen
     await deleteOldPollMessages(client, config);
 
-    // 4. 5 Minuten warten
-    await wait(5 * 60 * 1000);
-
-    // 5. Poll-Daten leeren
+    // 4. Poll-Daten leeren
     clearAllPollData();
 
-    // 6. Neue Polls erstellen
+    // 5. Kurz warten
+    await wait(30 * 1000);
+
+    // 6. Neue Polls für die neue Woche erstellen
     await createAllPolls(client, config);
 
     console.log("Montags-Flow abgeschlossen.");
@@ -120,7 +121,7 @@ client.on("interactionCreate", async interaction => {
       }
 
       if (interaction.customId === "admin_reminder") {
-        return sendReminder(interaction);
+        return sendReminder(interaction, client, config);
       }
     }
   } catch (err) {
@@ -162,6 +163,17 @@ client.once("clientReady", async () => {
     "* * * * *",
     async () => {
       await closeDuePolls(client, config);
+    },
+    {
+      timezone: config.timezone
+    }
+  );
+
+  // Jede Minute prüfen, ob ein automatischer Reminder fällig ist
+  cron.schedule(
+    "* * * * *",
+    async () => {
+      await sendAutomaticReminders(client, config);
     },
     {
       timezone: config.timezone
