@@ -1,38 +1,32 @@
 {
   "botName": "Gladiators Vote",
-  "guildId": "1441059738610696345",
+  "guildId": "1426177066604298345",
   "applicationId": "1485472793771511989",
   "timezone": "Europe/Berlin",
 
   "postImmediatelyOnStartup": false,
 
-  "trackingChannelId": "1485914011345092708",
-  "adminPanelChannelId": "1485920970001744013",
+  "trackingChannelId": "1490834155846500573",
+  "adminPanelChannelId": "1490837475353166000",
 
   "days": {
     "friday": {
-      "channelId": "1485470967752032406",
+      "channelId": "1490832461800935676",
       "eventTime": "21:00",
       "closeHour": 12,
       "closeMinute": 0
     },
     "saturday": {
-      "channelId": "1485471020293816372",
+      "channelId": "1490832651429482506",
       "eventTime": "21:00",
-      "closeHour": 12,
-      "closeMinute": 0
-    },
-    "sunday": {
-      "channelId": "1485471079550943363",
-      "eventTime": "20:00",
       "closeHour": 12,
       "closeMinute": 0
     }
   },
 
   "trackedRoleIds": [
-    "1441147464265633792",
-    "1441471887946551317"
+    "1490831862250344571",
+    "1482531092488654978"
   ],
 
   "adminUserId": "1425580097661833443"
