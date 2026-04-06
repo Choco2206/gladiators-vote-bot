@@ -1,6 +1,42 @@
 const { EmbedBuilder } = require("discord.js");
 const { load } = require("./store");
 
+function pad(n) {
+  return String(n).padStart(2, "0");
+}
+
+function formatDate(date) {
+  return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()}`;
+}
+
+function getWeekRangeText(polls) {
+  if (!polls || polls.length === 0) {
+    return "unbekannter Zeitraum";
+  }
+
+  const dates = polls
+    .map(poll => {
+      if (!poll.eventTime) return null;
+
+      const match = poll.eventTime.match(/^(\d{2})\.(\d{2})\.(\d{4})/);
+      if (!match) return null;
+
+      const [, day, month, year] = match;
+      return new Date(Number(year), Number(month) - 1, Number(day));
+    })
+    .filter(Boolean)
+    .sort((a, b) => a - b);
+
+  if (dates.length === 0) {
+    return "unbekannter Zeitraum";
+  }
+
+  const first = dates[0];
+  const last = dates[dates.length - 1];
+
+  return `${formatDate(first)} bis ${formatDate(last)}`;
+}
+
 async function postTracking(client, config) {
   try {
     const guild = await client.guilds.fetch(config.guildId);
@@ -14,14 +50,13 @@ async function postTracking(client, config) {
     const polls = load();
 
     if (polls.length === 0) {
-      const emptyEmbed = new EmbedBuilder()
+      const embed = new EmbedBuilder()
         .setTitle("🏛️ Weekly Gladiator Ranking")
         .setColor(0xff3c00)
-        .setDescription("Für die vergangene Woche wurden keine Poll-Daten gefunden.")
-        .setFooter({ text: "Nicht abgestimmt = Absage" })
+        .setDescription("Keine Daten für diese Woche vorhanden.")
         .setTimestamp();
 
-      await channel.send({ embeds: [emptyEmbed] });
+      await channel.send({ embeds: [embed] });
       return;
     }
 
@@ -30,31 +65,25 @@ async function postTracking(client, config) {
     for (const poll of polls) {
       for (const userId of poll.eligible || []) {
         if (!stats.has(userId)) {
-          stats.set(userId, { userId, yes: 0, no: 0 });
+          stats.set(userId, { userId, yes: 0 });
         }
 
-        const vote = poll.votes?.[userId];
-
-        if (vote === "yes") {
+        if (poll.votes?.[userId] === "yes") {
           stats.get(userId).yes += 1;
-        } else {
-          stats.get(userId).no += 1;
         }
       }
     }
 
-    const sorted = [...stats.values()].sort((a, b) => {
-      if (b.yes !== a.yes) return b.yes - a.yes;
-      if (a.no !== b.no) return a.no - b.no;
-      return a.userId.localeCompare(b.userId);
-    });
+    const totalPolls = polls.length;
+    const weekRange = getWeekRangeText(polls);
 
-    const totalPolls = polls.length || 1;
+    const sorted = [...stats.values()].sort((a, b) => {
+      return b.yes - a.yes;
+    });
 
     const description = sorted
       .map((entry, index) => {
-        const ratio = `${entry.yes}/${totalPolls}`;
-        return `**${index + 1}.** <@${entry.userId}> • 💣 ${entry.yes} • ❌ ${entry.no} • **${ratio}**`;
+        return `**${index + 1}.** <@${entry.userId}> • ${entry.yes}/${totalPolls} zugesagt`;
       })
       .join("\n");
 
@@ -62,15 +91,17 @@ async function postTracking(client, config) {
       .setTitle("🏛️ Weekly Gladiator Ranking")
       .setColor(0xff3c00)
       .setDescription(
-        `⚔️ **Kampfbereitschaft der letzten Woche** ⚔️\n\n${description || "Keine Daten gefunden."}`
+        `⚔️ **Kampfbereitschaft vom ${weekRange}** ⚔️\n\n` +
+        `${description}`
       )
       .setFooter({ text: "Nicht abgestimmt = Absage" })
       .setTimestamp();
 
     await channel.send({ embeds: [embed] });
+
     console.log("Tracking gepostet.");
   } catch (err) {
-    console.error("Fehler beim Weekly Tracking:", err);
+    console.error("Fehler beim Tracking:", err);
   }
 }
 
