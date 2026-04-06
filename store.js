@@ -6,9 +6,11 @@ const FILE = path.join(DATA_DIR, "polls.json");
 
 function ensureDataFile() {
   const dir = path.dirname(FILE);
+
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
+
   if (!fs.existsSync(FILE)) {
     fs.writeFileSync(FILE, "[]", "utf8");
   }
@@ -16,9 +18,11 @@ function ensureDataFile() {
 
 function load() {
   ensureDataFile();
+
   try {
     return JSON.parse(fs.readFileSync(FILE, "utf8"));
-  } catch {
+  } catch (err) {
+    console.error("Fehler beim Laden der polls.json:", err);
     return [];
   }
 }
@@ -28,4 +32,8 @@ function save(data) {
   fs.writeFileSync(FILE, JSON.stringify(data, null, 2), "utf8");
 }
 
-module.exports = { load, save };
+module.exports = {
+  load,
+  save,
+  FILE
+};
