@@ -30,8 +30,8 @@ function getDayLabel(dayKey) {
   }[dayKey] || dayKey;
 }
 
-function pad(n) {
-  return String(n).padStart(2, "0");
+function getEventTitle() {
+  return "💣 BOMBER CUP 💣";
 }
 
 function getNextDateForDay(dayKey) {
@@ -46,22 +46,98 @@ function getNextDateForDay(dayKey) {
   return result;
 }
 
+function pad(n) {
+  return String(n).padStart(2, "0");
+}
+
 function buildTimes(dayKey, cfg) {
   const targetDate = getNextDateForDay(dayKey);
 
-  const [h, m] = cfg.eventTime.split(":").map(Number);
+  const [eventHour, eventMinute] = cfg.eventTime.split(":").map(Number);
 
-  const event = new Date(targetDate);
-  event.setHours(h, m, 0, 0);
+  const eventDate = new Date(targetDate);
+  eventDate.setHours(eventHour, eventMinute, 0, 0);
 
-  const close = new Date(targetDate);
-  close.setHours(cfg.closeHour, cfg.closeMinute, 0, 0);
+  const closeDate = new Date(targetDate);
+  closeDate.setHours(cfg.closeHour, cfg.closeMinute, 0, 0);
+
+  const eventText =
+    `${pad(eventDate.getDate())}.${pad(eventDate.getMonth() + 1)}.${eventDate.getFullYear()}, ` +
+    `${pad(eventHour)}:${pad(eventMinute)} Uhr`;
+
+  const closeText =
+    `${pad(closeDate.getDate())}.${pad(closeDate.getMonth() + 1)}.${closeDate.getFullYear()}, ` +
+    `${pad(cfg.closeHour)}:${pad(cfg.closeMinute)} Uhr`;
 
   return {
-    eventText: `${pad(event.getDate())}.${pad(event.getMonth()+1)}.${event.getFullYear()}, ${pad(h)}:${pad(m)} Uhr`,
-    closeText: `${pad(close.getDate())}.${pad(close.getMonth()+1)}.${close.getFullYear()}, ${pad(cfg.closeHour)}:${pad(cfg.closeMinute)} Uhr`,
-    closeISO: close.toISOString()
+    eventText,
+    closeText,
+    closeISO: closeDate.toISOString()
   };
+}
+
+function buildVoteButtons(disabled = false) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("vote_yes")
+        .setLabel("Zusage")
+        .setEmoji("💣")
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(disabled),
+      new ButtonBuilder()
+        .setCustomId("vote_no")
+        .setLabel("Absage")
+        .setEmoji("❌")
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(disabled)
+    )
+  ];
+}
+
+function buildPollEmbed(dayKey, poll) {
+  const yes = Object.entries(poll.votes)
+    .filter(([, value]) => value === "yes")
+    .map(([userId]) => userId);
+
+  const no = Object.entries(poll.votes)
+    .filter(([, value]) => value === "no")
+    .map(([userId]) => userId);
+
+  return new EmbedBuilder()
+    .setTitle(getEventTitle())
+    .setColor(0xff3c00)
+    .setDescription(
+      `🛡️ **${getDayLabel(dayKey)}**\n\n` +
+      `📅 **Event:** ${poll.eventTime}\n` +
+      `⏳ **Abstimmung bis:** ${poll.closeTime}`
+    )
+    .addFields(
+      {
+        name: "💣 Zusage",
+        value: formatUsers(yes),
+        inline: false
+      },
+      {
+        name: "❌ Absage",
+        value: formatUsers(no),
+        inline: false
+      }
+    )
+    .setFooter({ text: "Gladiators Vote" })
+    .setTimestamp();
+}
+
+function buildPollLink(config, poll) {
+  return `https://discord.com/channels/${config.guildId}/${poll.channelId}/${poll.msgId}`;
+}
+
+function getRemainingUsers(poll) {
+  return (poll.eligible || []).filter(userId => !poll.votes[userId]);
+}
+
+function memberHasTrackedRole(member, config) {
+  return config.trackedRoleIds.some(roleId => member.roles.cache.has(roleId));
 }
 
 // =========================
@@ -69,133 +145,305 @@ function buildTimes(dayKey, cfg) {
 // =========================
 
 async function refreshEligibleUsers(client, config) {
-  const guild = await client.guilds.fetch(config.guildId);
-  await guild.members.fetch({ force: true });
+  try {
+    const guild = await client.guilds.fetch(config.guildId);
 
-  const map = new Map();
+    await guild.members.fetch({ force: true });
 
-  for (const roleId of config.trackedRoleIds) {
-    const role = guild.roles.cache.get(roleId);
-    if (!role) continue;
+    const memberMap = new Map();
 
-    for (const m of role.members.values()) {
-      if (!m.user.bot) map.set(m.id, m);
+    for (const roleId of config.trackedRoleIds) {
+      const role = guild.roles.cache.get(roleId);
+      if (!role) continue;
+
+      for (const member of role.members.values()) {
+        if (!member.user.bot) {
+          memberMap.set(member.id, member);
+        }
+      }
     }
+
+    eligibleCache = [...memberMap.keys()];
+    console.log(`Eligible Members geladen: ${eligibleCache.length}`);
+  } catch (err) {
+    console.error("Fehler beim Laden der Rollenmitglieder:", err);
   }
-
-  eligibleCache = [...map.keys()];
 }
 
 // =========================
-// EMBED
-// =========================
-
-function buildEmbed(dayKey, poll) {
-  const yes = Object.entries(poll.votes).filter(([,v]) => v==="yes").map(([id])=>id);
-  const no = Object.entries(poll.votes).filter(([,v]) => v==="no").map(([id])=>id);
-
-  return new EmbedBuilder()
-    .setTitle("💣 BOMBER CUP 💣")
-    .setColor(0xff3c00)
-    .setDescription(
-      `🛡️ **${getDayLabel(dayKey)}**\n\n` +
-      `📅 ${poll.eventTime}\n` +
-      `⏳ ${poll.closeTime}`
-    )
-    .addFields(
-      { name: "Zusage", value: formatUsers(yes) },
-      { name: "Absage", value: formatUsers(no) }
-    );
-}
-
-// =========================
-// CREATE POLLS
+// POLLS
 // =========================
 
 function getActivePolls() {
-  return load().filter(p => !p.closed);
+  return load().filter(poll => !poll.closed);
+}
+
+async function createPoll(client, config, dayKey, cfg) {
+  const guild = await client.guilds.fetch(config.guildId);
+  const channel = await guild.channels.fetch(cfg.channelId);
+
+  if (!channel) {
+    console.error(`Kanal nicht gefunden für ${dayKey}`);
+    return;
+  }
+
+  const times = buildTimes(dayKey, cfg);
+
+  const poll = {
+    id: `${dayKey}_${Date.now()}`,
+    dayKey,
+    channelId: cfg.channelId,
+    votes: {},
+    eligible: [...eligibleCache],
+    closed: false,
+    closeAt: times.closeISO,
+    eventTime: times.eventText,
+    closeTime: times.closeText,
+    createdAt: new Date().toISOString(),
+    reminderSent: false,
+    reminderMessageId: null
+  };
+
+  const pollMessage = await channel.send({
+    embeds: [buildPollEmbed(dayKey, poll)],
+    components: buildVoteButtons(false)
+  });
+
+  const statusMessage = await channel.send({
+    content:
+      poll.eligible.length > 0
+        ? `🏆 **Noch nicht abgestimmt:**\n${formatUsers(poll.eligible)}`
+        : "✅ **Alle abgestimmt**"
+  });
+
+  poll.msgId = pollMessage.id;
+  poll.statusId = statusMessage.id;
+
+  const polls = load();
+  polls.push(poll);
+  save(polls);
+
+  console.log(`Poll erstellt: ${dayKey} -> ${cfg.channelId}`);
 }
 
 async function createAllPolls(client, config) {
-  const active = getActivePolls();
-  if (active.length > 0) return;
+  const activePolls = getActivePolls();
+
+  if (activePolls.length > 0) {
+    console.log("Es gibt bereits aktive Polls. Kein neuer Post.");
+    return;
+  }
 
   await refreshEligibleUsers(client, config);
 
   for (const [dayKey, cfg] of Object.entries(config.days)) {
+    await createPoll(client, config, dayKey, cfg);
+  }
+}
+
+async function updatePollMessage(client, config, poll) {
+  try {
     const guild = await client.guilds.fetch(config.guildId);
-    const channel = await guild.channels.fetch(cfg.channelId);
+    const channel = await guild.channels.fetch(poll.channelId);
+    if (!channel) return;
 
-    const times = buildTimes(dayKey, cfg);
+    const pollMessage = await channel.messages.fetch(poll.msgId).catch(() => null);
+    const statusMessage = await channel.messages.fetch(poll.statusId).catch(() => null);
 
-    const poll = {
-      id: Date.now(),
-      dayKey,
-      channelId: cfg.channelId,
-      votes: {},
-      eligible: [...eligibleCache],
-      closed: false,
-      closeAt: times.closeISO,
-      eventTime: times.eventText,
-      closeTime: times.closeText,
-      reminderSent: false,
-      reminderMessageId: null
-    };
+    if (pollMessage) {
+      await pollMessage.edit({
+        embeds: [buildPollEmbed(poll.dayKey, poll)],
+        components: buildVoteButtons(poll.closed)
+      });
+    }
 
-    const pollMsg = await channel.send({
-      embeds: [buildEmbed(dayKey, poll)],
-      components: [
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId("vote_yes").setLabel("Zusage").setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId("vote_no").setLabel("Absage").setStyle(ButtonStyle.Danger)
-        )
-      ]
-    });
+    const remaining = getRemainingUsers(poll);
 
-    const statusMsg = await channel.send({
-      content: `Noch nicht abgestimmt:\n${formatUsers(poll.eligible)}`
-    });
-
-    poll.msgId = pollMsg.id;
-    poll.statusId = statusMsg.id;
-
-    const all = load();
-    all.push(poll);
-    save(all);
+    if (statusMessage) {
+      if (remaining.length === 0) {
+        await statusMessage.edit({
+          content: poll.closed
+            ? "🔒 **Umfrage beendet. Alle haben abgestimmt.**"
+            : "✅ **Alle abgestimmt**"
+        });
+      } else if (poll.closed) {
+        await statusMessage.edit({
+          content:
+            `🔒 **Umfrage beendet.**\n\n` +
+            `Nicht abgestimmt:\n${formatUsers(remaining)}`
+        });
+      } else {
+        await statusMessage.edit({
+          content: `🏆 **Noch nicht abgestimmt:**\n${formatUsers(remaining)}`
+        });
+      }
+    }
+  } catch (err) {
+    console.error("Fehler beim Aktualisieren einer Poll:", err);
   }
 }
 
 // =========================
-// UPDATE
+// AUTO ADD NEW MEMBER TO OPEN POLLS
 // =========================
 
-async function updatePoll(client, config, poll) {
-  const guild = await client.guilds.fetch(config.guildId);
-  const channel = await guild.channels.fetch(poll.channelId);
+async function addMemberToOpenPolls(member, client, config) {
+  try {
+    if (!member || member.user.bot) return;
+    if (member.guild.id !== config.guildId) return;
+    if (!memberHasTrackedRole(member, config)) return;
 
-  const pollMsg = await channel.messages.fetch(poll.msgId).catch(()=>null);
-  const statusMsg = await channel.messages.fetch(poll.statusId).catch(()=>null);
+    const polls = load();
+    let changed = false;
 
-  const remaining = poll.eligible.filter(id => !poll.votes[id]);
+    for (const poll of polls) {
+      if (poll.closed) continue;
 
-  if (pollMsg) {
-    await pollMsg.edit({
-      embeds: [buildEmbed(poll.dayKey, poll)],
-      components: [
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId("vote_yes").setLabel("Zusage").setStyle(ButtonStyle.Success).setDisabled(poll.closed),
-          new ButtonBuilder().setCustomId("vote_no").setLabel("Absage").setStyle(ButtonStyle.Danger).setDisabled(poll.closed)
-        )
-      ]
+      if (!poll.eligible.includes(member.id)) {
+        poll.eligible.push(member.id);
+        changed = true;
+        await updatePollMessage(client, config, poll);
+        console.log(`Neuer Spieler automatisch zu Poll hinzugefügt: ${member.user.tag} -> ${poll.dayKey}`);
+      }
+    }
+
+    if (changed) {
+      if (!eligibleCache.includes(member.id)) {
+        eligibleCache.push(member.id);
+      }
+      save(polls);
+    }
+  } catch (err) {
+    console.error("Fehler beim automatischen Hinzufügen zu offenen Polls:", err);
+  }
+}
+
+// =========================
+// REMINDER
+// =========================
+
+async function deleteReminderMessage(client, config, poll) {
+  if (!poll.reminderMessageId) return;
+
+  try {
+    const guild = await client.guilds.fetch(config.guildId);
+    const channel = await guild.channels.fetch(poll.channelId);
+    if (!channel) return;
+
+    const reminderMessage = await channel.messages
+      .fetch(poll.reminderMessageId)
+      .catch(() => null);
+
+    if (reminderMessage) {
+      await reminderMessage.delete().catch(() => null);
+    }
+
+    poll.reminderMessageId = null;
+  } catch (err) {
+    console.error("Fehler beim Löschen der Reminder-Nachricht:", err);
+  }
+}
+
+async function sendReminder(interaction, client, config) {
+  const polls = load().filter(p => !p.closed);
+
+  if (polls.length === 0) {
+    return interaction.reply({
+      content: "Keine aktiven Polls.",
+      ephemeral: true
     });
   }
 
-  if (statusMsg) {
-    await statusMsg.edit({
-      content: remaining.length === 0
-        ? "Alle abgestimmt"
-        : `Noch nicht abgestimmt:\n${formatUsers(remaining)}`
+  let sentCount = 0;
+  const allPolls = load();
+
+  for (const poll of allPolls) {
+    if (poll.closed) continue;
+
+    const remaining = getRemainingUsers(poll);
+    if (remaining.length === 0) continue;
+
+    const guild = await client.guilds.fetch(config.guildId);
+    const channel = await guild.channels.fetch(poll.channelId);
+    if (!channel) continue;
+
+    const pollLink = buildPollLink(config, poll);
+
+    const reminderMessage = await channel.send({
+      content:
+        `⚠️ **Erinnerung für ${getDayLabel(poll.dayKey)}**\n\n` +
+        `Folgende Leute haben noch nicht abgestimmt:\n` +
+        `${mentionUsersInline(remaining)}\n\n` +
+        `Bitte jetzt kurz abstimmen.\n` +
+        `**Nicht abgestimmt = Absage**\n\n` +
+        `Zur Umfrage:\n${pollLink}`,
+      allowedMentions: { parse: ["users"] }
     });
+
+    poll.reminderSent = true;
+    poll.reminderMessageId = reminderMessage.id;
+    sentCount += 1;
+  }
+
+  save(allPolls);
+
+  return interaction.reply({
+    content:
+      sentCount > 0
+        ? `Reminder wurden in ${sentCount} Channel(s) gesendet.`
+        : "Es gibt keine offenen Stimmen mehr.",
+    ephemeral: true
+  });
+}
+
+async function sendAutomaticReminders(client, config) {
+  const polls = load();
+  const now = new Date();
+  let changed = false;
+
+  for (const poll of polls) {
+    if (poll.closed) continue;
+    if (poll.reminderSent) continue;
+
+    const remaining = getRemainingUsers(poll);
+    if (remaining.length === 0) continue;
+
+    const closeTime = new Date(poll.closeAt);
+    const diffMs = closeTime.getTime() - now.getTime();
+    const diffMinutes = diffMs / 1000 / 60;
+
+    if (diffMinutes <= 60 && diffMinutes > 59) {
+      try {
+        const guild = await client.guilds.fetch(config.guildId);
+        const channel = await guild.channels.fetch(poll.channelId);
+        if (!channel) continue;
+
+        const pollLink = buildPollLink(config, poll);
+
+        const reminderMessage = await channel.send({
+          content:
+            `⚠️ **Erinnerung für ${getDayLabel(poll.dayKey)}**\n\n` +
+            `Folgende Leute haben noch nicht abgestimmt:\n` +
+            `${mentionUsersInline(remaining)}\n\n` +
+            `Bitte jetzt kurz abstimmen.\n` +
+            `**Nicht abgestimmt = Absage**\n\n` +
+            `Zur Umfrage:\n${pollLink}`,
+          allowedMentions: { parse: ["users"] }
+        });
+
+        poll.reminderSent = true;
+        poll.reminderMessageId = reminderMessage.id;
+        changed = true;
+
+        console.log(`Automatischer Reminder gesendet: ${poll.dayKey}`);
+      } catch (err) {
+        console.error("Fehler beim automatischen Reminder:", err);
+      }
+    }
+  }
+
+  if (changed) {
+    save(polls);
   }
 }
 
@@ -206,41 +454,36 @@ async function updatePoll(client, config, poll) {
 async function closeDuePolls(client, config) {
   const polls = load();
   const now = new Date();
-
   let changed = false;
 
   for (const poll of polls) {
     if (!poll.closed && now >= new Date(poll.closeAt)) {
       poll.closed = true;
-
-      // Reminder löschen
-      if (poll.reminderMessageId) {
-        const guild = await client.guilds.fetch(config.guildId);
-        const channel = await guild.channels.fetch(poll.channelId);
-
-        const msg = await channel.messages.fetch(poll.reminderMessageId).catch(()=>null);
-        if (msg) await msg.delete().catch(()=>null);
-      }
-
-      await updatePoll(client, config, poll);
       changed = true;
+
+      await deleteReminderMessage(client, config, poll);
+      await updatePollMessage(client, config, poll);
+
+      console.log(`Poll geschlossen: ${poll.dayKey}`);
     }
   }
 
-  if (changed) save(polls);
+  if (changed) {
+    save(polls);
+  }
 }
 
 // =========================
-// VOTE (FIX FÜR NEUE SPIELER)
+// VOTING
 // =========================
 
 async function handleVote(interaction, client, config) {
   const polls = load();
   const poll = polls.find(p => p.msgId === interaction.message.id);
 
-  if (!poll || poll.closed) return;
+  if (!poll) return;
+  if (poll.closed) return;
 
-  // 🔥 KEY FIX
   if (!poll.eligible.includes(interaction.user.id)) {
     poll.eligible.push(interaction.user.id);
   }
@@ -251,74 +494,134 @@ async function handleVote(interaction, client, config) {
     interaction.customId === "vote_yes" ? "yes" : "no";
 
   save(polls);
-  await updatePoll(client, config, poll);
+  await updatePollMessage(client, config, poll);
 }
 
 // =========================
-// SYNC BUTTON
+// ADMIN ACTIONS
 // =========================
 
-async function syncPolls(client, config) {
-  const polls = load().filter(p => !p.closed);
-
-  await refreshEligibleUsers(client, config);
-
-  let changed = false;
-
-  for (const poll of polls) {
-    for (const userId of eligibleCache) {
-      if (!poll.eligible.includes(userId)) {
-        poll.eligible.push(userId);
-        changed = true;
-      }
-    }
-
-    await updatePoll(client, config, poll);
-  }
-
-  if (changed) save(polls);
-}
-
-// =========================
-// REMINDER AUTO
-// =========================
-
-async function sendAutomaticReminders(client, config) {
+async function deleteActivePollsAndResend(client, config) {
   const polls = load();
-  const now = new Date();
+  const activePolls = polls.filter(poll => !poll.closed);
 
-  for (const poll of polls) {
-    if (poll.closed || poll.reminderSent) continue;
-
-    const remaining = poll.eligible.filter(id => !poll.votes[id]);
-    if (remaining.length === 0) continue;
-
-    const diff = (new Date(poll.closeAt) - now) / 1000 / 60;
-
-    if (diff <= 60 && diff > 59) {
+  for (const poll of activePolls) {
+    try {
       const guild = await client.guilds.fetch(config.guildId);
       const channel = await guild.channels.fetch(poll.channelId);
+      if (!channel) continue;
 
-      const msg = await channel.send({
-        content:
-          `⚠️ Erinnerung\n\n` +
-          `${mentionUsersInline(remaining)}\n\n` +
-          `Jetzt abstimmen!\n\n` +
-          `Nicht abgestimmt = Absage`
-      });
+      const pollMessage = await channel.messages.fetch(poll.msgId).catch(() => null);
+      const statusMessage = await channel.messages.fetch(poll.statusId).catch(() => null);
+      const reminderMessage = poll.reminderMessageId
+        ? await channel.messages.fetch(poll.reminderMessageId).catch(() => null)
+        : null;
 
-      poll.reminderSent = true;
-      poll.reminderMessageId = msg.id;
+      if (pollMessage) await pollMessage.delete().catch(() => null);
+      if (statusMessage) await statusMessage.delete().catch(() => null);
+      if (reminderMessage) await reminderMessage.delete().catch(() => null);
+    } catch (err) {
+      console.error("Fehler beim Löschen aktiver Polls:", err);
     }
   }
 
-  save(polls);
+  const remaining = polls.filter(poll => poll.closed);
+  save(remaining);
+
+  await createAllPolls(client, config);
+}
+
+async function deleteOldPollMessages(client, config) {
+  const polls = load();
+
+  for (const poll of polls) {
+    try {
+      const guild = await client.guilds.fetch(config.guildId);
+      const channel = await guild.channels.fetch(poll.channelId);
+      if (!channel) continue;
+
+      const pollMessage = await channel.messages.fetch(poll.msgId).catch(() => null);
+      const statusMessage = await channel.messages.fetch(poll.statusId).catch(() => null);
+      const reminderMessage = poll.reminderMessageId
+        ? await channel.messages.fetch(poll.reminderMessageId).catch(() => null)
+        : null;
+
+      if (pollMessage) await pollMessage.delete().catch(() => null);
+      if (statusMessage) await statusMessage.delete().catch(() => null);
+      if (reminderMessage) await reminderMessage.delete().catch(() => null);
+    } catch (err) {
+      console.error("Fehler beim Löschen alter Poll-Nachrichten:", err);
+    }
+  }
+
+  console.log("Alte Poll-Nachrichten gelöscht.");
+}
+
+function clearAllPollData() {
+  save([]);
+  console.log("Alle Poll-Daten wurden geleert.");
+}
+
+async function showActivePolls(interaction) {
+  const polls = load().filter(p => !p.closed);
+
+  if (polls.length === 0) {
+    return interaction.reply({
+      content: "Keine aktiven Polls.",
+      ephemeral: true
+    });
+  }
+
+  const text = polls
+    .map(
+      p =>
+        `• ${p.dayKey.toUpperCase()} | Stimmen: ${Object.keys(p.votes).length}/${p.eligible.length}`
+    )
+    .join("\n");
+
+  return interaction.reply({
+    content: `📊 **Aktive Polls:**\n${text}`,
+    ephemeral: true
+  });
+}
+
+async function syncPolls(client, config) {
+  try {
+    const polls = load().filter(p => !p.closed);
+
+    await refreshEligibleUsers(client, config);
+
+    let changed = false;
+
+    for (const poll of polls) {
+      for (const userId of eligibleCache) {
+        if (!poll.eligible.includes(userId)) {
+          poll.eligible.push(userId);
+          changed = true;
+        }
+      }
+
+      await updatePollMessage(client, config, poll);
+    }
+
+    if (changed) {
+      save(polls);
+    }
+  } catch (err) {
+    console.error("Fehler bei Poll-Sync:", err);
+  }
 }
 
 module.exports = {
   createAllPolls,
   closeDuePolls,
   handleVote,
+  deleteActivePollsAndResend,
+  deleteOldPollMessages,
+  clearAllPollData,
+  showActivePolls,
   syncPolls,
-  sendAutomaticReminders
+  sendReminder,
+  sendAutomaticReminders,
+  addMemberToOpenPolls
 };
